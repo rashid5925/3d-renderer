@@ -204,7 +204,7 @@ int main() {
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255); 
         SDL_RenderClear(renderer);
         double dt = 1.0 / TARGET_FPS;
-        angle += 2 * M_PI * dt / 3; 
+        angle += 2 * M_PI * dt / 2; 
         // dz += 1 * dt;
 
         Vector3D rotated_points[sizeof(points) / sizeof(points[0])];
