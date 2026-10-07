@@ -1,7 +1,7 @@
 # 3D Rendering
 Demo:
 
-[![Watch the Demo Video](assets/ss2.png)](assets/recording.mov)
+<video src="assets/recording.mov" controls width="100%"></video>
 
 ![Screenshot 1](assets/ss1.png)
 
