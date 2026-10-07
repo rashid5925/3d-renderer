@@ -1,5 +1,7 @@
 # 3D Rendering
 Demo:
-![Screenshot 1](assets/ss1.png)
 
+[![Watch the Demo Video](./ss2.png)](/assets/recording.mov)
+
+![Screenshot 1](assets/ss1.png)
 
