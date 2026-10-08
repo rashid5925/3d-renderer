@@ -4,7 +4,7 @@
 #include <stdlib.h>
 
 #include "math3d.h"
-#include "utah_teapot.h"
+// #include "utah_teapot.h"
 
 #define WINDOW_TITLE "3D"
 #define WINDOW_WIDTH 1200
@@ -13,9 +13,134 @@
 #define TARGET_FPS 60
 
 typedef struct {
+    Vector3D *vertices;
+    int vertex_count;
+    int (*faces)[3];
+    int face_count;
+} Mesh;
+
+typedef struct {
     int face[3];
     double depth;
 } FaceDepth;
+
+Mesh load_obj(const char *path) {
+    Mesh mesh = {0};
+
+    FILE *file = fopen(path, "r");
+    if (!file) {
+        fprintf(stderr, "Failed to open file: %s\n", path);
+        return mesh;
+    }
+
+    char line[1024];
+
+    while (fgets(line, sizeof(line), file)) {
+
+        // Vertex
+        if (strncmp(line, "v ", 2) == 0) {
+            Vector3D v;
+
+            if (sscanf(line, "v %lf %lf %lf",
+                       &v.x, &v.y, &v.z) == 3) {
+
+                Vector3D *vertices = realloc(
+                    mesh.vertices,
+                    (mesh.vertex_count + 1) * sizeof(Vector3D)
+                );
+
+                if (!vertices) {
+                    fprintf(stderr, "Failed to allocate vertices\n");
+                    free(mesh.vertices);
+                    free(mesh.faces);
+                    fclose(file);
+
+                    Mesh empty = {0};
+                    return empty;
+                }
+
+                mesh.vertices = vertices;
+                mesh.vertices[mesh.vertex_count++] = v;
+            }
+        }
+
+        // Face
+        else if (strncmp(line, "f ", 2) == 0) {
+
+            int indices[64];
+            int count = 0;
+
+            char *token = strtok(line + 2, " \t\r\n");
+
+            while (token && count < 64) {
+
+                // Extract vertex index from:
+                //
+                // 1
+                // 1/2
+                // 1/2/3
+                // 1//3
+                //
+                indices[count] = atoi(token);
+
+                // Convert OBJ index to zero-based index
+                if (indices[count] > 0) {
+                    indices[count]--;
+                }
+                else if (indices[count] < 0) {
+                    indices[count] = mesh.vertex_count + indices[count];
+                }
+
+                count++;
+                token = strtok(NULL, " \t\r\n");
+            }
+
+            if (count < 3)
+                continue;
+
+            /*
+             * Triangulate polygon using a triangle fan:
+             *
+             * 1 2 3 4
+             *
+             * becomes:
+             *
+             * 1 2 3
+             * 1 3 4
+             */
+
+            for (int i = 1; i < count - 1; i++) {
+
+                int (*faces)[3] = realloc(
+                    mesh.faces,
+                    (mesh.face_count + 1) * sizeof(int[3])
+                );
+
+                if (!faces) {
+                    fprintf(stderr, "Failed to allocate faces\n");
+                    free(mesh.vertices);
+                    free(mesh.faces);
+                    fclose(file);
+
+                    Mesh empty = {0};
+                    return empty;
+                }
+
+                mesh.faces = faces;
+
+                mesh.faces[mesh.face_count][0] = indices[0];
+                mesh.faces[mesh.face_count][1] = indices[i];
+                mesh.faces[mesh.face_count][2] = indices[i + 1];
+
+                mesh.face_count++;
+            }
+        }
+    }
+
+    fclose(file);
+
+    return mesh;
+}
 
 double deg_to_rad(double degrees) {
     return degrees * M_PI / 180.0;
@@ -208,7 +333,7 @@ void fill_triangle(SDL_Renderer *renderer, Vector2D p1, Vector2D p2, Vector2D p3
     }
 }
 
-int main() {
+int main(int argc, char *argv[]) {
     SDL_Window *window = SDL_CreateWindow(
         WINDOW_TITLE,
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, WINDOW_WIDTH,
@@ -219,49 +344,15 @@ int main() {
     SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
     SDL_RenderClear(renderer);
 
-    // Vector3D points[] = {
-    //     {0.25, 0.25, 0.25},
-    //     {-0.25, 0.25, 0.25},
-    //     {-0.25, -0.25, 0.25},
-    //     {0.25, -0.25, 0.25},
-
-    //     {0.25, 0.25, -0.25},
-    //     {-0.25, 0.25, -0.25},
-    //     {-0.25, -0.25, -0.25},
-    //     {0.25, -0.25, -0.25}
-    // };
-
-    // int faces[12][3] = {
-    //     {0, 1, 2}, {0, 2, 3},   // top    (z+) 
-    //     {4, 6, 5}, {4, 7, 6},   // bottom (z-)
-    //     {0, 5, 1}, {0, 4, 5},   // side   (y+)
-    //     {1, 6, 2}, {1, 5, 6},   // side   (x-)
-    //     {2, 7, 3}, {2, 6, 7},   // side   (y-)
-    //     {3, 4, 0}, {3, 7, 4}    // side   (x+)
-    // };
-
-    // Vector3D points[12] = {
-    //     {-0.262866,  0.425325,  0.000000},
-    //     { 0.262866,  0.425325,  0.000000},
-    //     {-0.262866, -0.425325,  0.000000},
-    //     { 0.262866, -0.425325,  0.000000},
-    //     { 0.000000, -0.262866,  0.425325},
-    //     { 0.000000,  0.262866,  0.425325},
-    //     { 0.000000, -0.262866, -0.425325},
-    //     { 0.000000,  0.262866, -0.425325},
-    //     { 0.425325,  0.000000, -0.262866},
-    //     { 0.425325,  0.000000,  0.262866},
-    //     {-0.425325,  0.000000, -0.262866},
-    //     {-0.425325,  0.000000,  0.262866}
-    // };
-
-    // // 20 Triangular Faces (Counter-Clockwise Winding)
-    // int faces[20][3] = {
-    //     {0, 11, 5},  {0, 5, 1},   {0, 1, 7},   {0, 7, 10},  {0, 10, 11},
-    //     {1, 5, 9},   {5, 11, 4},  {11, 10, 2}, {10, 7, 6},  {7, 1, 8},
-    //     {3, 9, 4},   {3, 4, 2},   {3, 2, 6},   {3, 6, 8},   {3, 8, 9},
-    //     {4, 9, 5},   {2, 4, 11},  {6, 2, 10},  {8, 6, 7},   {9, 8, 1}
-    // };
+    const char *obj_path = "assets/teapot.obj";
+    if (argc > 1) {
+        obj_path = argv[1];
+    }
+    Mesh mesh = load_obj(obj_path);
+    if (!mesh.vertices || !mesh.faces) {
+        fprintf(stderr, "Failed to load mesh\n");
+        return 1;
+    }
 
     // light source
     Vector3D light_source = {0.0, 0.0, -1.0};
@@ -271,10 +362,11 @@ int main() {
     float angle_x = 0.0f;
     float angle_y = 0.0f;
     double speed = 5.0; // units per second
-    Vector3D position = {0.0, 0.0, 7.0};
+    Vector3D position = {0.0, 0.0, 4.0};
     Uint32 last_ticks = SDL_GetTicks();
     Uint32 fps_timer = SDL_GetTicks();
-int frame_count = 0;
+    int frame_count = 0;
+    Vector3D *rotated_points = malloc(mesh.vertex_count * sizeof(Vector3D));
     while (!done) {
         SDL_Event event;
         const Uint8 *keys = SDL_GetKeyboardState(NULL);
@@ -305,28 +397,36 @@ int frame_count = 0;
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255); 
         SDL_RenderClear(renderer);
 
-        Vector3D rotated_points[sizeof(points) / sizeof(points[0])];
-        for (int i = 0; i < sizeof(points) / sizeof(points[0]); ++i) {
-            rotated_points[i] = transform(points[i], angle_x, angle_y, position);
+        for (int i = 0; i < mesh.vertex_count; ++i) {
+            rotated_points[i] = transform(mesh.vertices[i], angle_x, angle_y, position);
         }
-        sort_faces_by_depth(faces, sizeof(faces) / sizeof(faces[0]), rotated_points);
+        sort_faces_by_depth(mesh.faces, mesh.face_count, rotated_points);
 
-        for (int i = 0; i < sizeof(faces) / sizeof(faces[0]); ++i) {
+        for (int i = 0; i < mesh.face_count; ++i) {
+            int i0 = mesh.faces[i][0];
+            int i1 = mesh.faces[i][1];
+            int i2 = mesh.faces[i][2];
             Vector3D face_normal = cross_product(
                 (Vector3D){
-                    rotated_points[faces[i][1]].x - rotated_points[faces[i][0]].x,
-                    rotated_points[faces[i][1]].y - rotated_points[faces[i][0]].y,
-                    rotated_points[faces[i][1]].z - rotated_points[faces[i][0]].z
+                    rotated_points[i1].x - rotated_points[i0].x,
+                    rotated_points[i1].y - rotated_points[i0].y,
+                    rotated_points[i1].z - rotated_points[i0].z
                 },
                 (Vector3D){
-                    rotated_points[faces[i][2]].x - rotated_points[faces[i][0]].x,
-                    rotated_points[faces[i][2]].y - rotated_points[faces[i][0]].y,
-                    rotated_points[faces[i][2]].z - rotated_points[faces[i][0]].z
+                    rotated_points[i2].x - rotated_points[i0].x,
+                    rotated_points[i2].y - rotated_points[i0].y,
+                    rotated_points[i2].z - rotated_points[i0].z
                 }
             );
 
+            if (rotated_points[i0].z < 0.1 ||
+                rotated_points[i1].z < 0.1 ||
+                rotated_points[i2].z < 0.1) {
+                continue;
+            }
+
             // backface culling
-            Vector3D to_tri = rotated_points[faces[i][0]];   // camera is at the origin
+            Vector3D to_tri = rotated_points[i0];   // camera is at the origin
             if (dot_product(face_normal, to_tri) >= 0) continue; 
 
             double ambient = 0.15;
@@ -334,14 +434,11 @@ int frame_count = 0;
             double shading = ambient + (1.0 - ambient) * diffuse;
             
             Vector3D triangle[3] = {
-                rotated_points[faces[i][0]],
-                rotated_points[faces[i][1]],
-                rotated_points[faces[i][2]]
+                rotated_points[i0],
+                rotated_points[i1],
+                rotated_points[i2]
             };
             Vector2D projected_triangle[3];
-            if (rotated_points[faces[i][0]].z < 0.1 || rotated_points[faces[i][1]].z < 0.1 || rotated_points[faces[i][2]].z < 0.1) {
-                continue; 
-            }
             for (int j = 0; j < 3; ++j) {
                 Vector2D projected_point1 = project(triangle[j]);
                 Vector2D projected_point2 = project(triangle[(j + 1) % 3]);
@@ -366,6 +463,9 @@ int frame_count = 0;
         }
     }
 
+    free(rotated_points);
+    free(mesh.vertices);
+    free(mesh.faces);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
