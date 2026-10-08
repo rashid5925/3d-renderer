@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <SDL.h>
 #include <math.h>
+#include <stdlib.h>
 
 #include "math3d.h"
 #include "utah_teapot.h"
@@ -10,6 +11,11 @@
 #define WINDOW_HEIGHT 800
 #define BACKGROUND_COLOR 0x00000000
 #define TARGET_FPS 60
+
+typedef struct {
+    int face[3];
+    double depth;
+} FaceDepth;
 
 double deg_to_rad(double degrees) {
     return degrees * M_PI / 180.0;
@@ -48,21 +54,76 @@ Vector3D cross_product(Vector3D a, Vector3D b) {
     return result;
 }
 
-void sort_faces_by_depth(int faces[][3], int num_faces, Vector3D points[]) {
-    for (int i = 0; i < num_faces - 1; ++i) {
-        for (int j = 0; j < num_faces - i - 1; ++j) {
-            double depth1 = (points[faces[j][0]].z + points[faces[j][1]].z + points[faces[j][2]].z) / 3.0;
-            double depth2 = (points[faces[j + 1][0]].z + points[faces[j + 1][1]].z + points[faces[j + 1][2]].z) / 3.0;
-            if (depth1 < depth2) {
-                int temp[3];
-                for (int k = 0; k < 3; ++k) {
-                    temp[k] = faces[j][k];
-                    faces[j][k] = faces[j + 1][k];
-                    faces[j + 1][k] = temp[k];
-                }
-            }
+static void swap_face_depth(FaceDepth *a, FaceDepth *b) {
+    FaceDepth temp = *a;
+    *a = *b;
+    *b = temp;
+}
+
+static int partition_faces(FaceDepth faces[], int low, int high) {
+    double pivot = faces[high].depth;
+
+    int i = low - 1;
+
+    for (int j = low; j < high; ++j) {
+        // Farthest -> nearest
+        if (faces[j].depth >= pivot) {
+            ++i;
+            swap_face_depth(&faces[i], &faces[j]);
         }
     }
+
+    swap_face_depth(&faces[i + 1], &faces[high]);
+
+    return i + 1;
+}
+
+
+static void quicksort_faces(FaceDepth faces[], int low, int high) {
+    if (low >= high)
+        return;
+
+    int pivot = partition_faces(faces, low, high);
+
+    quicksort_faces(faces, low, pivot - 1);
+    quicksort_faces(faces, pivot + 1, high);
+}
+
+
+void sort_faces_by_depth(int faces[][3], int num_faces, Vector3D points[]) {
+    if (num_faces <= 1)
+        return;
+
+    FaceDepth *face_depths = malloc(num_faces * sizeof(FaceDepth));
+
+    if (face_depths == NULL) {
+        fprintf(stderr, "Failed to allocate memory for face sorting\n");
+        return;
+    }
+
+    // Calculate depth once for every face
+    for (int i = 0; i < num_faces; ++i) {
+        face_depths[i].face[0] = faces[i][0];
+        face_depths[i].face[1] = faces[i][1];
+        face_depths[i].face[2] = faces[i][2];
+
+        face_depths[i].depth =
+            (points[faces[i][0]].z +
+             points[faces[i][1]].z +
+             points[faces[i][2]].z) / 3.0;
+    }
+
+    // Sort farthest -> nearest
+    quicksort_faces(face_depths, 0, num_faces - 1);
+
+    // Copy sorted faces back
+    for (int i = 0; i < num_faces; ++i) {
+        faces[i][0] = face_depths[i].face[0];
+        faces[i][1] = face_depths[i].face[1];
+        faces[i][2] = face_depths[i].face[2];
+    }
+
+    free(face_depths);
 }
 
 Vector2D screen(Vector2D point) {
@@ -77,19 +138,34 @@ Vector2D screen(Vector2D point) {
 
 Vector2D project(Vector3D point) {
     Vector2D p = {
-        point.x / point.z,
+        (point.x / ((double)WINDOW_WIDTH/(double)WINDOW_HEIGHT)) / point.z,
         point.y / point.z
     };
     return p;
 }
 
-Vector3D rotate(Vector3D point, double angle) {
+Vector3D rotate_x(Vector3D point, double angle) {
+    Vector3D p = {
+        point.x,
+        point.y * cos(angle) - point.z * sin(angle),
+        point.y * sin(angle) + point.z * cos(angle)
+    };
+    return p;
+}
+
+Vector3D rotate_y(Vector3D point, double angle) {
     Vector3D p = {
         point.x * cos(angle) - point.z * sin(angle),
         point.y,
         point.x * sin(angle) + point.z * cos(angle)
     };
     return p;
+}
+
+Vector3D transform(Vector3D p, double ax, double ay, Vector3D pos) {
+    p = rotate_x(p, ax);
+    p = rotate_y(p, ay);
+    return (Vector3D){p.x + pos.x, p.y + pos.y, p.z + pos.z};
 }
 
 void draw_line(SDL_Renderer *renderer, int x1, int y1, int x2, int y2, Uint32 color, double shading) {
@@ -117,12 +193,12 @@ void fill_triangle(SDL_Renderer *renderer, Vector2D p1, Vector2D p2, Vector2D p3
     double min_y = clamp(min(p1.y, p2.y, p3.y), 0.0, (double)WINDOW_HEIGHT);
     double max_y = clamp(max(p1.y, p2.y, p3.y), 0.0, (double)WINDOW_HEIGHT);
 
+    double aplha_d = ((p2.y - p3.y) * (p1.x - p3.x) + (p3.x - p2.x) * (p1.y - p3.y));
+    double beta_d = ((p2.y - p3.y) * (p1.x - p3.x) + (p3.x - p2.x) * (p1.y - p3.y));
     for (int y = (int)min_y; y <= (int)max_y; ++y) {
         for (int x = (int)min_x; x <= (int)max_x; ++x) {
-            double alpha = ((p2.y - p3.y) * (x - p3.x) + (p3.x - p2.x) * (y - p3.y)) /
-                           ((p2.y - p3.y) * (p1.x - p3.x) + (p3.x - p2.x) * (p1.y - p3.y));
-            double beta = ((p3.y - p1.y) * (x - p3.x) + (p1.x - p3.x) * (y - p3.y)) /
-                          ((p2.y - p3.y) * (p1.x - p3.x) + (p3.x - p2.x) * (p1.y - p3.y));
+            double alpha = ((p2.y - p3.y) * (x - p3.x) + (p3.x - p2.x) * (y - p3.y)) / aplha_d;
+            double beta = ((p3.y - p1.y) * (x - p3.x) + (p1.x - p3.x) * (y - p3.y)) / beta_d;
             double gamma = 1.0 - alpha - beta;
 
             if (alpha >= 0 && beta >= 0 && gamma >= 0) {
@@ -192,54 +268,80 @@ int main() {
 
     int delay = 1000 / TARGET_FPS;
     int done = 0;
-    float angle = 0.0f;
-    double dz = 7.0f;
+    float angle_x = 0.0f;
+    float angle_y = 0.0f;
+    double speed = 5.0; // units per second
+    Vector3D position = {0.0, 0.0, 7.0};
+    Uint32 last_ticks = SDL_GetTicks();
+    Uint32 fps_timer = SDL_GetTicks();
+int frame_count = 0;
     while (!done) {
         SDL_Event event;
+        const Uint8 *keys = SDL_GetKeyboardState(NULL);
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) {
                 done = 1;
+            } else if (event.type == SDL_MOUSEWHEEL) {
+                position.z += event.wheel.y * 0.5;
+            } else if (event.type == SDL_MOUSEMOTION) {
+                if (event.motion.state & SDL_BUTTON_LMASK) {
+                    angle_x += event.motion.yrel * 0.01;
+                    angle_y += event.motion.xrel * 0.01;
+                }
             }
         }
+        // double dt = 1.0 / TARGET_FPS;        
+        // angle += 2 * M_PI * dt / 2;         
+        // dz += 1 * dt;
+        Uint32 now = SDL_GetTicks();
+        double dt = (now - last_ticks) / 1000.0;
+        last_ticks = now;
+
+        if (keys[SDL_SCANCODE_A]) position.x -= speed * dt;
+        if (keys[SDL_SCANCODE_D]) position.x += speed * dt;
+        if (keys[SDL_SCANCODE_W]) position.y += speed * dt;
+        if (keys[SDL_SCANCODE_S]) position.y -= speed * dt;
+
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255); 
         SDL_RenderClear(renderer);
-        double dt = 1.0 / TARGET_FPS;
-        angle += 2 * M_PI * dt / 2; 
-        // dz += 1 * dt;
 
         Vector3D rotated_points[sizeof(points) / sizeof(points[0])];
         for (int i = 0; i < sizeof(points) / sizeof(points[0]); ++i) {
-            rotated_points[i] = rotate(points[i], angle);
-            rotated_points[i].z += dz;
+            rotated_points[i] = transform(points[i], angle_x, angle_y, position);
         }
         sort_faces_by_depth(faces, sizeof(faces) / sizeof(faces[0]), rotated_points);
 
         for (int i = 0; i < sizeof(faces) / sizeof(faces[0]); ++i) {
-            Vector3D rotated_point1 = rotate(points[faces[i][0]], angle);
-            rotated_point1.z += dz;
-            Vector3D rotated_point2 = rotate(points[faces[i][1]], angle);
-            rotated_point2.z += dz;
-            Vector3D rotated_point3 = rotate(points[faces[i][2]], angle);
-            rotated_point3.z += dz;
-
             Vector3D face_normal = cross_product(
                 (Vector3D){
-                    rotated_point2.x - rotated_point1.x,
-                    rotated_point2.y - rotated_point1.y,
-                    rotated_point2.z - rotated_point1.z
+                    rotated_points[faces[i][1]].x - rotated_points[faces[i][0]].x,
+                    rotated_points[faces[i][1]].y - rotated_points[faces[i][0]].y,
+                    rotated_points[faces[i][1]].z - rotated_points[faces[i][0]].z
                 },
                 (Vector3D){
-                    rotated_point3.x - rotated_point1.x,
-                    rotated_point3.y - rotated_point1.y,
-                    rotated_point3.z - rotated_point1.z
+                    rotated_points[faces[i][2]].x - rotated_points[faces[i][0]].x,
+                    rotated_points[faces[i][2]].y - rotated_points[faces[i][0]].y,
+                    rotated_points[faces[i][2]].z - rotated_points[faces[i][0]].z
                 }
             );
+
+            // backface culling
+            Vector3D to_tri = rotated_points[faces[i][0]];   // camera is at the origin
+            if (dot_product(face_normal, to_tri) >= 0) continue; 
+
             double ambient = 0.15;
             double diffuse = clamp(dot_product(normalize(face_normal), light_source), 0.0, 1.0);
             double shading = ambient + (1.0 - ambient) * diffuse;
             
-            Vector3D triangle[3] = {rotated_point1, rotated_point2, rotated_point3};
+            Vector3D triangle[3] = {
+                rotated_points[faces[i][0]],
+                rotated_points[faces[i][1]],
+                rotated_points[faces[i][2]]
+            };
             Vector2D projected_triangle[3];
+            if (rotated_points[faces[i][0]].z < 0.1 || rotated_points[faces[i][1]].z < 0.1 || rotated_points[faces[i][2]].z < 0.1) {
+                continue; 
+            }
             for (int j = 0; j < 3; ++j) {
                 Vector2D projected_point1 = project(triangle[j]);
                 Vector2D projected_point2 = project(triangle[(j + 1) % 3]);
@@ -251,7 +353,17 @@ int main() {
         }
 
         SDL_RenderPresent(renderer);
-        SDL_Delay(delay);
+        // SDL_Delay(delay);
+        frame_count++;
+        Uint32 t = SDL_GetTicks();
+        if (t - fps_timer >= 1000) {
+            char title[64];
+            snprintf(title, sizeof(title), "%s - %d FPS (%.2f ms/frame)",
+                    WINDOW_TITLE, frame_count, (t - fps_timer) / (double)frame_count);
+            SDL_SetWindowTitle(window, title);
+            frame_count = 0;
+            fps_timer = t;
+        }
     }
 
     SDL_DestroyRenderer(renderer);
